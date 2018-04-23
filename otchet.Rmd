@@ -1,0 +1,161 @@
+---
+title: "Мат. моделирование. Упражнение №7"
+author: "Розумнюк А.А."
+date: '23 апреля 2018 г '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE}
+library('MASS') # набор данных Boston 
+library('splines') # сплайны 
+library('gam') # обобщённые аддитивные модели 
+library('akima') # график двумерной плоскости 
+library('ggplot2') # красивые графики 
+
+my.seed <- 1 
+attach(Boston) 
+str(Boston) 
+```
+
+Будем работать с переменными crim (количество преступлений) и nox (концентрация оксидов азота).
+
+Судя по графику, заимосвязь количества преступлений и концентрации оксидов азота нелинейна. Наблюдается также группа наблюдений с высоким значением crim, граница проходит примерно на уровне 30.
+
+```{r, echo=TRUE}
+gp <- ggplot(data = Boston, aes(x = nox, y = crim)) 
+gp <- gp + geom_point() + geom_abline(slope = 0, intercept = 30, col = 'red') 
+gp
+```
+
+Подберем степень сплайна. 
+
+```{r, echo=TRUE}
+fit.1 <- lm(crim ~ nox, data = Boston) 
+fit.2 <- lm(crim ~ poly(nox, 2), data = Boston) 
+fit.3 <- lm(crim ~ poly(nox, 3), data = Boston) 
+fit.4 <- lm(crim ~ poly(nox, 4), data = Boston) 
+fit.5 <- lm(crim ~ poly(nox, 5), data = Boston) 
+
+round(anova(fit.1, fit.2, fit.3, fit.4, fit.5), 2) 
+```
+
+Модель anova говорит нам о том, что полином 4 степени ухудшает модель, поэтому стоит остановиться на полиноме 3 степени.
+
+Получаем регрессионный анализ для полинома 3 степени.
+
+```{r, echo=TRUE}
+fit <- lm(crim ~ poly(nox, 3), data = Boston) 
+round(coef(summary(fit)), 2) 
+round(head(poly(nox, 3)), 3) 
+# можно получить сами значения nox в заданных степенях 
+round(head(poly(nox, 3, raw = T)), 3) 
+# на прогноз не повлияет, но оценки параметров изменяются 
+fit.2 <- lm(crim ~ poly(nox, 3, raw = T), data = Boston) 
+round(coef(summary(fit.2)), 2)
+```
+Получаем границы доверительного интервала.
+```{r, echo=TRUE}
+# границы изменения переменной nox 
+noxlims <- range(nox) 
+
+# значения nox, для которых делаем прогноз 
+nox.grid <- seq(from = noxlims[1], to = noxlims[2], length.out = 506) 
+
+# рассчитать прогнозы и их стандартные ошибки 
+preds <- predict(fit, newdata = list(nox = nox.grid), se = T) 
+
+# границы доверительного интервала для заработной платы 
+se.bands <- cbind(lower.bound = preds$fit - 2*preds$se.fit, 
+                  upper.bound = preds$fit + 2*preds$se.fit) 
+
+# смотрим результат 
+round(head(se.bands), 2)
+```
+
+Заметно, что график полностью находится в пределах доверительной области.
+
+```{r, echo=TRUE}
+# наблюдения 
+plot(nox, crim, xlim = noxlims, cex = 0.5, col = 'darkgrey') 
+
+# заголовок 
+title('Полином третьей степени') 
+
+# модель 
+lines(nox.grid, preds$fit, lwd = 2, col = 'green') 
+
+# доверительные интервалы прогноза 
+matlines(x = nox.grid, y = se.bands, lwd = 2, col = 'blue', lty = 3) 
+
+```
+
+Рассмотрим зависимость вероятности того, что величина количества преступлений больше 30, от концентрации оксидов азота.
+
+```{r, echo=TRUE}
+fit <- glm(I(crim > 30) ~ poly(nox, 3), data = Boston, family = 'binomial')
+# прогнозы
+preds <- predict(fit, newdata = list(nox = nox.grid), se = T)
+
+# пересчитываем доверительные интервалы и прогнозы в исходные ЕИ
+pfit <- exp(preds$fit) / (1 + exp(preds$fit))
+se.bands.logit <- cbind(lower.bound = preds$fit - 2*preds$se.fit,
+                        upper.bound = preds$fit + 2*preds$se.fit)
+se.bands <- exp(se.bands.logit)/(1 + exp(se.bands.logit))
+
+# результат - доверительный интервал для вероятности события 
+#  количество преступлений больше 30  
+round(head(se.bands), 15)
+
+# сетка для графика (изображаем вероятности, поэтому интервал изменения y мал)
+plot(dis, I(crim > 30), xlim = noxlims, type = 'n', ylim = c(0, 1),
+     ylab = 'P(Crim > 30 | Nox)')
+
+# фактические наблюдения показываем засечками
+points(jitter(dis), I((crim > 30)) , cex = 0.5, pch = '|', col = 'darkgrey')
+
+# модель
+lines(nox.grid, pfit, lwd = 2, col = 'blue')
+
+# доверительные интервалы
+matlines(nox.grid, se.bands, lwd = 1, col = 'blue', lty = 3)
+
+# заголовок
+title('Полином третьей степени')
+```
+
+Такой большой доверительный интервал говорит о неоднородности разбиения.
+
+Построим натуральный кубический сплайн с тремя узлами.
+```{r, echo=TRUE}
+# нарезаем предиктор age на 3 равных интервала
+table(cut(nox, 3))
+# кубический сплайн с тремя узлами
+fit <- lm(crim ~ bs(nox, knots = c(0.385, 0.547, 0.709)), data = Boston)
+# прогноз
+preds.spl <- predict(fit, newdata = list(nox = nox.grid), se = T)
+
+# 3 узла -- 6 степеней свободы (столбцы матрицы)
+dim(bs(nox, knots = c(0.385, 0.547, 0.709)))
+
+par(mfrow = c(1, 1), mar = c(4.5, 4.5, 1, 8.5), oma = c(0, 0, 0, 0), xpd = T)
+
+# наблюдения
+plot(nox, crim, col = 'grey')
+
+# модель кубического сплайна
+lines(nox.grid, preds.spl$fit, lwd = 2)
+
+# доверительный интервал
+lines(nox.grid, preds.spl$fit + 2*preds.spl$se, lty = 'dashed')
+lines(nox.grid, preds.spl$fit - 2*preds.spl$se, lty = 'dashed')
+
+# заголовок
+title("Натуральный кубический сплайн")
+
+```
+
+Получаем достаочно широкие доверительные интервалы, это связано с неоднородностью самих данных, так же с различным количеством наблюдений в классах.
